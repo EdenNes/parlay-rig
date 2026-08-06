@@ -11,7 +11,6 @@ Frechet ceiling, leg bids when asking whether it printed below the floor.
 """
 import json
 import os
-import random
 import sqlite3
 import sys
 from datetime import datetime, timezone

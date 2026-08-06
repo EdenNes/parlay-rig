@@ -100,8 +100,6 @@ def _one_leg(conn, leg: str, start: str, end: str, now_iso: str) -> int:
     for lo, hi in windows:
         try:
             bars += _store(conn, leg, _bars(leg, lo, hi))
-        except kalshi.RateLimited:
-            raise
         except (ValueError, KeyError, OSError) as exc:
             error = "%s: %s" % (type(exc).__name__, exc)
             break

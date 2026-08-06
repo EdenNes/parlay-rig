@@ -6,14 +6,11 @@ shows a genuine two-sided book. This samples the tape and counts which fills
 clear that bar, and why the rest do not.
 """
 import json
-import logging
 import random
 import sqlite3
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
-log = logging.getLogger("coverage")
 
 SAMPLE = 20000
 NEAR_SECONDS = 120
@@ -82,15 +79,13 @@ def run(conn: sqlite3.Connection, n: int = SAMPLE) -> Dict[str, Any]:
     for row in rows:
         verdict = classify(conn, row)
         counts[verdict] = counts.get(verdict, 0) + 1
-    total = sum(counts.values()) or 1
+    total = len(rows) or 1
     return {"sampled": total, "counts": counts,
             "scorable_pct": round(100.0 * counts.get("scorable", 0) / total, 1)}
 
 
 def main() -> int:
     import settle
-    logging.basicConfig(level=logging.INFO, stream=sys.stdout,
-                        format="%(asctime)s %(message)s")
     n = int(sys.argv[1]) if len(sys.argv) > 1 else SAMPLE
     result = run(settle.connect(), n)
     print(json.dumps(result, indent=1))

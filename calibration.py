@@ -26,6 +26,7 @@ Notes before you start:
 
   and the interval is centre +/- margin.
 """
+import random
 import sqlite3
 from typing import Any, Dict, List, Tuple
 
@@ -41,7 +42,6 @@ def settled_fills(conn: sqlite3.Connection, n: int) -> List[sqlite3.Row]:
     not the math under test.
     """
     top = conn.execute("SELECT MAX(rowid) FROM rig.trades").fetchone()[0] or 0
-    import random
     ids = {random.randint(1, top) for _ in range(n * 3)}
     marks = ",".join("?" * len(ids))
     return conn.execute(
