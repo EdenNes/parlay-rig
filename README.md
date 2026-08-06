@@ -45,8 +45,8 @@ Neither substitutes for the other.
 | `legs.py` | derives, then narrows, the price window each leg needs |
 | `backfill.py` | pulls one-minute bid/ask history per leg over that window |
 | `coverage.py` | how many fills can be scored, and why the rest cannot |
-| `scoring.py` | Frechet bounds and per-fill verdict (written by Eden) |
-| `calibration.py` | price versus realized outcome (written by Eden) |
+| `scoring.py` | Frechet bounds and per-fill verdict |
+| `calibration.py` | price versus realized outcome |
 | `report.py` | joins it together and writes the markdown report |
 
 ## Data model
@@ -81,7 +81,7 @@ read-only once collection stops. Everything derived is written to
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install requests pytest
-.venv/bin/python -m pytest            # 104 passing, 20 red by design
+.venv/bin/python -m pytest            # 124 passing
 ```
 
 Stages, in order. Each is resumable and safe to re-run.
@@ -95,6 +95,19 @@ python3 coverage.py 3000 # what fraction of fills are scorable
 python3 report.py        # the coherence report
 ```
 
+Calibration has no CLI; it streams the settled tape through `calibrate`:
+
+```python
+import settle, calibration
+conn = settle.connect()
+cur = conn.execute(
+    "SELECT t.yes_price AS price, s.result AS result "
+    "FROM rig.trades t JOIN settlements s ON s.ticker = t.ticker "
+    "WHERE s.result IN ('yes','no')")
+for row in calibration.calibrate(cur):
+    print(row)
+```
+
 ## What the tape contains
 
 Collected 2026-07-30 04:14 to 2026-08-05 21:31 UTC.
@@ -105,7 +118,8 @@ Collected 2026-07-30 04:14 to 2026-08-05 21:31 UTC.
 | fills | 3,754,710 |
 | distinct legs | 40,261 |
 | settlement confirmed | 96.7% (1,825,794 finalized) |
-| parlays that hit | 11.6% of resolved fills |
+| parlay combinations that settled yes | 11.6% of resolved markets |
+| settled fills that hit | 16.7% |
 
 ## The measurement problem this rig had, and the fix
 
@@ -120,19 +134,68 @@ The fix is a point-in-time join. Kalshi publishes one-minute candlestick history
 per market, so each leg is priced at the fill's own minute instead of whenever
 the collector happened to look. Empty books fell from 30.5% to 2.8%.
 
-What remains is a smaller and more honest limit: about a quarter of fills have
-at least one leg with no quote activity within two minutes.
+What remains is a smaller and more honest limit: about a third of fills have
+at least one leg with no quote activity within two minutes of the fill.
+Measured on the complete backfilled leg set, 20,000 random fills per window:
 
 | tolerance | scorable | no bar near fill | one-sided book |
-|---|---|---|---|
-| ±60s | 66.0% | 32.3% | 1.7% |
-| ±120s | 74.4% | 22.8% | 2.8% |
-| ±300s | 82.0% | 15.2% | 2.9% |
-| ±600s | 85.7% | 10.5% | 3.9% |
+|-------|-------|-------|------|
+| ±60s  | 59.3% | 37.8% | 2.9% |
+| ±120s | 67.6% | 29.2% | 3.2% |
+| ±300s | 77.0% | 18.8% | 4.2% |
+| ±600s | 82.4% | 12.7% | 4.8% |
 
 Widening the window buys coverage and sells accuracy. ±120s is the reported
 figure because these are live in-game legs, where a ten-minute-old leg price is
-the original staleness problem in a smaller costume.
+the original staleness problem in a smaller costume. The two failure modes move
+in opposite directions as the window widens: missing bars are a search-radius
+problem and shrink, while one-sided books are a market-quality problem and grow,
+because the marginal legs found at wider radii are thinner markets.
+
+## Results
+
+### Coherence: nothing there
+
+Of 40,000 fills drawn, 27,109 were scorable at ±120s. Pricing each leg at its
+mid, 233 fills (0.86%) printed outside the Frechet interval. Netting the maker
+fee and pricing each leg on the side least favourable to the claim: 199 above
+the ceiling (0.73%) and 149 below the floor (0.55%), median 4 legs per fill,
+median Frechet interval width 0.405.
+
+The 20%-above-ceiling rate measured from the phase 1 snapshots was entirely a
+staleness artifact. With point-in-time leg prices there is no meaningful
+model-free mispricing in this tape. `report.py` reproduces this.
+
+### Calibration: a small, real, fee-sized seller edge
+
+Across all 3,652,705 settled fills, one number, pre-registered as the primary
+test before the data was seen:
+
+    mean price 17.03c   realized hit rate 16.70%   seller edge +0.33c/contract
+
+The 95% Wilson interval on the hit rate is (16.67%, 16.74%); the mean price
+sits above it, so the edge is distinguishable from zero. It is not
+distinguishable from the cost of doing business: the standard maker fee at
+these prices is roughly a quarter cent per contract, which consumes most of
+the gross edge. Each fill counts once, unweighted by contract size.
+
+Per-bucket results are exploratory, not pre-registered:
+
+| price bucket | n | mean price | hit rate (95% Wilson) | seller edge |
+|---|---|---|---|---|
+| 0 to 1c | 632,782 | 0.41c | 0.17% (0.16, 0.18) | +0.24c |
+| 1 to 2c | 296,759 | 1.39c | 0.91% (0.88, 0.95) | +0.48c |
+| 2 to 5c | 506,996 | 3.30c | 2.74% (2.69, 2.78) | +0.56c |
+| 5 to 10c | 498,100 | 7.23c | 6.17% (6.10, 6.24) | +1.06c |
+| 10 to 20c | 577,747 | 14.50c | 13.63% (13.54, 13.72) | +0.87c |
+| 20 to 35c | 526,414 | 26.81c | 26.53% (26.41, 26.64) | +0.29c |
+| 35 to 50c | 325,796 | 41.75c | 41.74% (41.57, 41.91) | +0.01c |
+| 50c and up | 288,111 | 70.01c | 71.99% (71.83, 72.15) | -1.98c |
+
+The shape is the favorite-longshot bias: cheap parlays hit less often than
+their price implies (sellers earn), expensive ones hit more often (sellers
+lose). Where the volume is, below 20c, the seller side collected between a
+quarter cent and a cent per contract before fees.
 
 ## Limitations
 
