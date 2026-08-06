@@ -28,6 +28,7 @@ Notes before you start:
 """
 import random
 import sqlite3
+import math
 from typing import Any, Dict, List, Tuple
 
 # Prices below 20c carry most parlay volume, so the buckets are finer there.
@@ -50,6 +51,7 @@ def settled_fills(conn: sqlite3.Connection, n: int) -> List[sqlite3.Row]:
         "WHERE t.rowid IN (%s) AND s.result IN ('yes','no') LIMIT ?" % marks,
         list(ids) + [n]).fetchall()
 
+# [0.0, 0.01, 0.02, 0.05, 0.10, 0.20, 0.35, 0.50, 1.0]
 
 def bucket_of(price: float) -> int:
     """Index of the bucket this price belongs to.
@@ -57,12 +59,33 @@ def bucket_of(price: float) -> int:
     A price equal to an edge belongs to the bucket that edge opens, and any
     price at or above the last edge belongs to the final bucket.
     """
-    raise NotImplementedError("Eden writes this")
+    if (price >= 0) and (price < 0.01):
+      return 0
+    elif (price >= 0.01) and (price < 0.02):
+      return 1
+    elif (price >= 0.02) and (price < 0.05):
+      return 2
+    elif (price >= 0.05) and (price < 0.10):
+      return 3
+    elif (price >= 0.10) and (price < 0.20):
+      return 4
+    elif (price >= 0.20) and (price < 0.35):
+      return 5
+    elif (price >= 0.35) and (price < .50):
+      return 6
+    else:
+      return 7
+
+
 
 
 def wilson_interval(hits: int, n: int) -> Tuple[float, float]:
     """95% Wilson score interval for a hit rate. Returns (low, high)."""
-    raise NotImplementedError("Eden writes this")
+    p = (hits/n)
+    centre = ((p)+ (Z ** 2)/(2 * n)) / (1 + ((Z ** 2) /n))
+    margin = (Z * math.sqrt( p * (1 - p)/n + ((Z ** 2)/(4 * (n ** 2)))) / (1 + (Z ** 2)/ n))
+    return ((max(0.0, (centre - margin))), (min(1.0, (centre + margin))))
+
 
 
 def calibrate(fills: List[Any]) -> List[Dict[str, Any]]:
@@ -73,4 +96,25 @@ def calibrate(fills: List[Any]) -> List[Dict[str, Any]]:
                "interval": (low, high)}
     where edge is the seller's, mean_price minus hit_rate.
     """
-    raise NotImplementedError("Eden writes this")
+    tally = {}
+    rows = []
+    
+    for fill in fills:
+      b = bucket_of(fill["price"])
+      if b not in tally:
+        tally[b] = {"n":0,"hits":0,"price_sum":0.0}
+      tally[b]["n"] += 1
+      tally[b]["price_sum"] += fill["price"]
+      if fill["result"] == "yes":
+        tally[b]["hits"] += 1
+
+  
+    for b in sorted(tally):
+      hit_rate = tally[b]["hits"] / tally[b]["n"]
+      mean_price = tally[b]["price_sum"] / tally[b]["n"]
+      edge = (mean_price - hit_rate)
+      interval =  wilson_interval(tally[b]["hits"], tally[b]["n"])
+      rows.append({"bucket":b, "n":tally[b]["n"], "hits":tally[b]["hits"], "hit_rate":hit_rate, "mean_price":mean_price, "edge":edge, "interval":interval})
+
+    return rows
+
