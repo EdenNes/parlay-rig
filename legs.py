@@ -13,6 +13,8 @@ import sys
 import time
 from typing import Dict, Optional, Tuple
 
+import kalshi
+
 log = logging.getLogger("legs")
 
 CHUNK = 20000
@@ -77,12 +79,52 @@ def build(conn: sqlite3.Connection) -> Dict[str, int]:
     return counts
 
 
+def tape_bounds(conn: sqlite3.Connection) -> Tuple[str, str]:
+    row = conn.execute("SELECT MIN(ts) AS lo, MAX(ts) AS hi "
+                       "FROM rig.trades").fetchone()
+    return row["lo"], row["hi"]
+
+
+def refine(conn: sqlite3.Connection) -> Dict[str, int]:
+    """Narrow each window to when the leg could actually have been priced.
+
+    A window derived from parlay lifetimes alone runs to 40 days for popular
+    legs, because parlays referencing them close far in the future. A leg has
+    no prices before its own market opened, and no fill sits outside the
+    collected tape, so the intersection of those three is the real window.
+    """
+    started = time.time()
+    lo_tape, hi_tape = tape_bounds(conn)
+    log.info("tape spans %s to %s", lo_tape, hi_tape)
+    tickers = [r["leg_ticker"] for r in
+               conn.execute("SELECT leg_ticker FROM leg_windows")]
+    narrowed = 0
+    for i in range(0, len(tickers), kalshi.MAX_TICKERS_PER_CALL):
+        batch = tickers[i:i + kalshi.MAX_TICKERS_PER_CALL]
+        for m in kalshi.markets_by_tickers(batch):
+            conn.execute(
+                "UPDATE leg_windows SET start_ts = MAX(start_ts, ?, ?), "
+                "end_ts = MIN(end_ts, ?, ?) WHERE leg_ticker = ?",
+                (m.get("open_time") or lo_tape, lo_tape,
+                 m.get("close_time") or hi_tape, hi_tape, m.get("ticker")))
+            narrowed += 1
+        conn.commit()
+        if i and i % 10000 == 0:
+            log.info("%d legs narrowed, %.0fs", narrowed, time.time() - started)
+    counts = {"legs": len(tickers), "narrowed": narrowed}
+    log.info("refine done in %.0fs: %s", time.time() - started, counts)
+    return counts
+
+
 def main() -> int:
     import settle
     os.makedirs("logs", exist_ok=True)
     logging.basicConfig(filename="logs/legs.log", level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
-    build(settle.connect())
+    conn = settle.connect()
+    if "--refine" not in sys.argv:
+        build(conn)
+    refine(conn)
     return 0
 
 

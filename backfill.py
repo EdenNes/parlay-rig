@@ -48,6 +48,10 @@ def _epoch(rfc3339: str) -> int:
 def _chunks(start: int, end: int) -> List[Tuple[int, int]]:
     """Split a window into day-sized requests, padded so a fill at the very
     edge of the window still has a bar on either side of it."""
+    # A leg that closed before its parlay was created inverts the window;
+    # the span between the two bounds is still the range worth asking for.
+    if start > end:
+        start, end = end, start
     lo, hi = start - PAD, end + PAD
     out = []
     while lo < hi:
@@ -80,7 +84,10 @@ def _pending(conn) -> List[Tuple[str, str, str]]:
         "SELECT w.leg_ticker AS t, w.start_ts AS s, w.end_ts AS e "
         "FROM leg_windows w LEFT JOIN leg_backfilled b "
         "ON b.leg_ticker = w.leg_ticker WHERE b.leg_ticker IS NULL "
-        "AND w.start_ts IS NOT NULL AND w.end_ts IS NOT NULL").fetchall()
+        "AND w.start_ts IS NOT NULL AND w.end_ts IS NOT NULL "
+        # Busiest legs first: they cover the most fills, so coverage becomes
+        # measurable long before the tail of one-off legs is done.
+        "ORDER BY w.n_parlays DESC").fetchall()
     return [(r["t"], r["s"], r["e"]) for r in rows]
 
 

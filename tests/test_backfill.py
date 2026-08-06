@@ -91,3 +91,8 @@ def test_rate_limiting_stops_the_run_without_marking_the_leg_done(conn,
     monkeypatch.setattr(backfill, "_bars", limited)
     assert backfill.run(conn)["legs"] == 0
     assert len(backfill._pending(conn)) == 1
+
+
+def test_an_inverted_window_is_read_in_the_right_direction():
+    lo, hi = backfill._chunks(5000, 1000)[0]
+    assert lo < hi
