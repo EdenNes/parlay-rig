@@ -69,7 +69,7 @@ def _ensure_market(conn, ticker: str, now_iso: str) -> Tuple[List[str], bool]:
         "SELECT legs_json FROM markets WHERE ticker = ?", (ticker,)).fetchone()
     if row is not None:
         legs = json.loads(row["legs_json"] or "[]")
-        return [l["market_ticker"] for l in legs], False
+        return [leg["market_ticker"] for leg in legs], False
     m = kalshi.market(ticker).get("market", {})
     legs = m.get("mve_selected_legs") or []
     conn.execute(
@@ -81,7 +81,7 @@ def _ensure_market(conn, ticker: str, now_iso: str) -> Tuple[List[str], bool]:
          m.get("created_time"), m.get("close_time"),
          _num(m.get("volume_fp")), _num(m.get("open_interest_fp")),
          m.get("status"), m.get("result"), now_iso))
-    return [l["market_ticker"] for l in legs], True
+    return [leg["market_ticker"] for leg in legs], True
 
 
 def _snapshot_legs(conn, leg_tickers: Set[str], now_iso: str) -> int:

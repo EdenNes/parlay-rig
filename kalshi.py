@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -49,3 +49,22 @@ def trades_page(min_ts: int, cursor: Optional[str] = None) -> Dict[str, Any]:
 
 def market(ticker: str) -> Dict[str, Any]:
     return _get("/markets/" + ticker)
+
+
+# 100 tickers per request is the empirical ceiling: 200 returns HTTP 414
+# (URI too long) from the edge proxy before the API ever sees it.
+MAX_TICKERS_PER_CALL = 100
+
+
+def markets_by_tickers(tickers: List[str]) -> List[Dict[str, Any]]:
+    if len(tickers) > MAX_TICKERS_PER_CALL:
+        raise ValueError("at most %d tickers per call" % MAX_TICKERS_PER_CALL)
+    page = _get("/markets", {"tickers": ",".join(tickers), "limit": 1000})
+    return page.get("markets", [])
+
+
+def candlesticks(series: str, ticker: str, start_ts: int,
+                 end_ts: int, period_interval: int = 1) -> Dict[str, Any]:
+    return _get("/series/%s/markets/%s/candlesticks" % (series, ticker),
+                {"start_ts": start_ts, "end_ts": end_ts,
+                 "period_interval": period_interval})
